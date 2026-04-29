@@ -11,10 +11,10 @@ from statsmodels.tsa.stattools import coint
 Pair = tuple[str, str]
 
 
-def _validate_multiindex_ohlcv(df: pd.DataFrame) -> None:
-    """Ensure input uses a 2-level MultiIndex column structure."""
-    if not isinstance(df.columns, pd.MultiIndex) or df.columns.nlevels != 2:
-        raise ValueError("Expected DataFrame with 2-level MultiIndex columns: (Ticker, Field).")
+def _validate_input(df: pd.DataFrame) -> None:
+    """Ensure input has column labels and is not empty."""
+    if df is None or df.empty or len(df.columns) == 0:
+        raise ValueError("Expected non-empty DataFrame with ticker columns.")
 
 
 def _get_price_field_for_ticker(df: pd.DataFrame, ticker: str) -> str:
@@ -35,44 +35,64 @@ def _get_ticker_series(df: pd.DataFrame, ticker: str) -> pd.Series:
     return series.sort_index()
 
 
+def _to_close_matrix(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize either raw OHLCV MultiIndex or flat close matrix to close matrix."""
+    _validate_input(df)
+    if isinstance(df.columns, pd.MultiIndex):
+        if df.columns.nlevels != 2:
+            raise ValueError("Expected 2-level MultiIndex for OHLCV input.")
+        tickers = sorted(df.columns.get_level_values(0).unique())
+        close_map: dict[str, pd.Series] = {}
+        for ticker in tickers:
+            try:
+                close_map[ticker] = _get_ticker_series(df, ticker)
+            except ValueError:
+                continue
+        if not close_map:
+            raise ValueError("No tickers with Close/Adj Close fields found.")
+        out = pd.DataFrame(close_map, index=df.index)
+    else:
+        out = df.copy()
+        for col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.sort_index()
+    out = out[~out.index.duplicated(keep="last")]
+    return out
+
+
 def _align_pair(df: pd.DataFrame, pair: Pair) -> pd.DataFrame:
     """Return aligned two-column frame for pair with null rows dropped."""
     a, b = pair
-    if a not in df.columns.get_level_values(0) or b not in df.columns.get_level_values(0):
+    matrix = _to_close_matrix(df)
+    if a not in matrix.columns or b not in matrix.columns:
         return pd.DataFrame(columns=[a, b], dtype=float)
 
-    joined = pd.concat([_get_ticker_series(df, a), _get_ticker_series(df, b)], axis=1)
-    return joined.dropna(how="any")
+    joined = pd.concat([matrix[a], matrix[b]], axis=1)
+    joined.columns = [a, b]
+    return joined.dropna(how="any").sort_index()
 
 
 def unique_tickers(df: pd.DataFrame) -> list[str]:
     """Return sorted unique ticker names from level-0 columns."""
-    _validate_multiindex_ohlcv(df)
-    return sorted(df.columns.get_level_values(0).unique().tolist())
+    matrix = _to_close_matrix(df)
+    return sorted(matrix.columns.tolist())
 
 
 def find_correlated_pairs(
     df: pd.DataFrame, window: int = 250, threshold: float = 0.8
 ) -> list[tuple[str, str, float]]:
     """Return positively correlated candidate pairs above threshold."""
-    _validate_multiindex_ohlcv(df)
+    matrix = _to_close_matrix(df)
     if window <= 1:
         raise ValueError("window must be > 1")
 
-    tickers = unique_tickers(df)
+    tickers = sorted(matrix.columns.tolist())
     if len(tickers) < 2:
         return []
 
-    close_map: dict[str, pd.Series] = {}
-    for ticker in tickers:
-        try:
-            close_map[ticker] = _get_ticker_series(df, ticker)
-        except ValueError:
-            continue
-
     candidates: list[tuple[str, str, float]] = []
-    for a, b in combinations(sorted(close_map.keys()), 2):
-        pair_df = pd.concat([close_map[a], close_map[b]], axis=1).dropna(how="any")
+    for a, b in combinations(tickers, 2):
+        pair_df = pd.concat([matrix[a], matrix[b]], axis=1).dropna(how="any")
         if len(pair_df) < window:
             continue
         pair_window = pair_df.tail(window)
@@ -91,7 +111,7 @@ def find_cointegrated_pairs(
     alpha: float = 0.05,
 ) -> list[tuple[str, str, float]]:
     """Run Engle-Granger test for candidate pairs and return significant results."""
-    _validate_multiindex_ohlcv(df)
+    _to_close_matrix(df)
     if window <= 2:
         raise ValueError("window must be > 2")
 
@@ -115,7 +135,7 @@ def find_cointegrated_pairs(
 
 def calculate_hedge_ratio(df: pd.DataFrame, pair: Pair, window: int = 250) -> float | None:
     """Compute hedge ratio by regressing pair[0] on pair[1]."""
-    _validate_multiindex_ohlcv(df)
+    _to_close_matrix(df)
     if window <= 1:
         raise ValueError("window must be > 1")
 
@@ -138,7 +158,7 @@ def calculate_spread(
     df: pd.DataFrame, pair: Pair, hedge_ratio: float, window: int = 90
 ) -> pd.Series:
     """Compute spread series over the latest window."""
-    _validate_multiindex_ohlcv(df)
+    _to_close_matrix(df)
     if window <= 1:
         raise ValueError("window must be > 1")
 

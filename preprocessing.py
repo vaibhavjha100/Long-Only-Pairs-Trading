@@ -15,9 +15,9 @@ def load_nifty500(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Missing file: {path}")
 
-    frame = pd.read_csv(path, header=[0, 1], index_col=0, parse_dates=[0])
-    if not isinstance(frame.columns, pd.MultiIndex) or frame.columns.nlevels != 2:
-        raise ValueError("nifty500.csv must have a 2-level column MultiIndex.")
+    frame = pd.read_csv(path, index_col=0, parse_dates=[0])
+    if isinstance(frame.columns, pd.MultiIndex):
+        raise ValueError("nifty500.csv should be a flat close-price matrix.")
     frame.index.name = "Date"
     return frame
 
@@ -26,13 +26,11 @@ def load_nifty50(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Missing file: {path}")
 
-    # yfinance single-ticker CSVs are often two-level headers; normalize to single-level.
-    frame = pd.read_csv(path, header=[0, 1], index_col=0, parse_dates=[0])
+    frame = pd.read_csv(path, index_col=0, parse_dates=[0])
     if isinstance(frame.columns, pd.MultiIndex):
-        if len(frame.columns.levels[1]) == 1:
-            frame.columns = frame.columns.get_level_values(0)
-        else:
-            frame.columns = [f"{a}_{b}" for a, b in frame.columns]
+        raise ValueError("nifty50.csv should be a flat close-price matrix.")
+    if "NIFTY50" not in frame.columns and len(frame.columns) == 1:
+        frame = frame.rename(columns={frame.columns[0]: "NIFTY50"})
     frame.index.name = "Date"
     return frame
 
@@ -42,10 +40,7 @@ def clean_nifty500(frame: pd.DataFrame) -> pd.DataFrame:
     cleaned = cleaned[~cleaned.index.duplicated(keep="last")]
     cleaned = cleaned.apply(pd.to_numeric, errors="coerce")
 
-    tickers = cleaned.columns.get_level_values(0).unique()
-    for ticker in tickers:
-        cleaned.loc[:, ticker] = cleaned.loc[:, ticker].ffill()
-    return cleaned
+    return cleaned.ffill()
 
 
 def clean_nifty50(frame: pd.DataFrame) -> pd.DataFrame:
