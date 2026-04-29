@@ -39,8 +39,11 @@ def clean_nifty500(frame: pd.DataFrame) -> pd.DataFrame:
     cleaned = frame.sort_index()
     cleaned = cleaned[~cleaned.index.duplicated(keep="last")]
     cleaned = cleaned.apply(pd.to_numeric, errors="coerce")
-
-    return cleaned.ffill()
+    cleaned = cleaned.ffill()
+    cleaned.columns = [
+        col[:-3] if isinstance(col, str) and col.endswith(".NS") else col for col in cleaned.columns
+    ]
+    return cleaned
 
 
 def clean_nifty50(frame: pd.DataFrame) -> pd.DataFrame:
