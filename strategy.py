@@ -1,3 +1,10 @@
+"""Long-only pairs trading walk-forward backtest.
+
+`main()` runs the full overlapping calendar (nifty500 ∩ nifty50). The first
+`BacktestParams.coint_window` trading sessions are burn-in (no rows in results).
+Signal date ``s`` (prior close); trades execute at ``t`` close.
+"""
+
 from __future__ import annotations
 
 import json
@@ -155,15 +162,21 @@ def run_backtest(
     if len(cal_full) < 3:
         raise ValueError("Insufficient overlapping calendar dates.")
 
-    min_start = max(p.coint_window, p.corr_window, p.hedge_window, p.z_window, p.sma_slow, p.rv_window) + 5
-    if len(cal_full) <= min_start:
-        raise ValueError("Full overlapping calendar too short for configured windows.")
+    # First `coint_window` trading sessions are burn-in: rolling Engle–Granger needs a
+    # full history window, so we do not emit results (and do not trade) until the
+    # (coint_window)th prior days exist for signal date s. First result row is for
+    # t = cal_full[coint_window] (0-based index), with s = cal_full[coint_window - 1]
+    # having exactly coint_window rows in df_upto_s.
+    if len(cal_full) <= p.coint_window:
+        raise ValueError(
+            f"Overlapping calendar too short: need > {p.coint_window} trading days, got {len(cal_full)}."
+        )
 
     cash = float(p.starting_cash)
     positions: dict[str, OpenLeg] = {}
     rows: list[dict[str, Any]] = []
 
-    loop_dates = cal_full[min_start + 1 :]
+    loop_dates = cal_full[p.coint_window :]
     if start_date is not None:
         loop_dates = loop_dates[loop_dates >= pd.Timestamp(start_date)]
     if end_date is not None:
@@ -471,11 +484,9 @@ def load_inputs(
 
 def main() -> int:
     universe, benchmark = load_inputs()
-    # Short recent slice: daily Engle–Granger on many pairs is expensive.
-    end = universe.index.max()
-    start = end - pd.Timedelta(days=14)
-    slim = BacktestParams(max_corr_pairs_for_coint=20)
-    bt = run_backtest(universe, benchmark, params=slim, start_date=start, end_date=end)
+    # Full overlapping history (NIFTY500 ∩ NIFTY50). First `coint_window` days are
+    # warm-up and are not present in the results table.
+    bt = run_backtest(universe, benchmark)
     assert_results_sanity(bt)
     out_path = PROJECT_ROOT / "results.csv"
     results_to_csv(bt, out_path)
