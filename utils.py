@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from itertools import combinations
 from typing import Iterable
 
 import numpy as np
@@ -81,7 +80,11 @@ def unique_tickers(df: pd.DataFrame) -> list[str]:
 def find_correlated_pairs(
     df: pd.DataFrame, window: int = 250, threshold: float = 0.8
 ) -> list[tuple[str, str, float]]:
-    """Return positively correlated candidate pairs above threshold."""
+    """Return positively correlated candidate pairs above threshold.
+
+    Uses a full-window correlation matrix for speed on wide universes (equivalent
+    to pairwise complete observations within the window for each pair).
+    """
     matrix = _to_close_matrix(df)
     if window <= 1:
         raise ValueError("window must be > 1")
@@ -90,17 +93,23 @@ def find_correlated_pairs(
     if len(tickers) < 2:
         return []
 
+    tail = matrix.tail(window)
+    if len(tail) < window:
+        return []
+
+    corr_mat = tail.corr()
     candidates: list[tuple[str, str, float]] = []
-    for a, b in combinations(tickers, 2):
-        pair_df = pd.concat([matrix[a], matrix[b]], axis=1).dropna(how="any")
-        if len(pair_df) < window:
+    for i, a in enumerate(tickers):
+        if a not in corr_mat.columns:
             continue
-        pair_window = pair_df.tail(window)
-        corr = float(pair_window[a].corr(pair_window[b]))
-        if np.isnan(corr):
-            continue
-        if corr >= threshold:
-            candidates.append((a, b, corr))
+        for b in tickers[i + 1 :]:
+            if b not in corr_mat.columns:
+                continue
+            corr = float(corr_mat.loc[a, b])
+            if np.isnan(corr):
+                continue
+            if corr >= threshold:
+                candidates.append((a, b, corr))
     return candidates
 
 
@@ -173,17 +182,149 @@ def calculate_spread(
 
 
 def calculate_zscore(spread_series: pd.Series, window: int = 60) -> pd.Series:
-    """Compute rolling z-score for spread series."""
+    """Compute rolling z-score for spread series (trailing; preserves the input index)."""
     if window <= 1:
         raise ValueError("window must be > 1")
 
-    spread = pd.to_numeric(spread_series, errors="coerce").dropna()
-    if len(spread) < window:
-        return pd.Series(dtype=float, name="zscore")
-
+    spread = pd.to_numeric(spread_series, errors="coerce")
     roll_mean = spread.rolling(window=window, min_periods=window).mean()
     roll_std = spread.rolling(window=window, min_periods=window).std(ddof=0)
     zscore = (spread - roll_mean) / roll_std.replace(0, np.nan)
-    zscore = zscore.dropna()
     zscore.name = "zscore"
     return zscore
+
+
+def rolling_zscore(series: pd.Series, window: int) -> pd.Series:
+    """Trailing rolling z-score (alias aligned with strategy naming)."""
+    return calculate_zscore(series, window)
+
+
+def calculate_log_hedge_ratio(
+    df: pd.DataFrame, pair: Pair, window: int = 250
+) -> tuple[float, float] | None:
+    """OLS on log(A) ~ alpha + beta*log(B); returns (alpha, beta) or None."""
+    if window <= 1:
+        raise ValueError("window must be > 1")
+
+    aligned = _align_pair(df, pair)
+    if len(aligned) < window:
+        return None
+
+    tail = aligned.tail(window)
+    log_a = np.log(pd.to_numeric(tail[pair[0]], errors="coerce"))
+    log_b = np.log(pd.to_numeric(tail[pair[1]], errors="coerce"))
+    mask = log_a.notna() & log_b.notna()
+    log_a = log_a[mask].to_numpy(dtype=float)
+    log_b = log_b[mask].to_numpy(dtype=float)
+    if len(log_a) < 2 or np.allclose(np.std(log_b, ddof=0), 0.0):
+        return None
+
+    x_design = np.column_stack([np.ones(len(log_b)), log_b])
+    coef = np.linalg.lstsq(x_design, log_a, rcond=None)[0]
+    return float(coef[0]), float(coef[1])
+
+
+def calculate_log_spread_series(
+    df: pd.DataFrame,
+    pair: Pair,
+    alpha: float,
+    beta: float,
+    window: int | None = None,
+) -> pd.Series:
+    """Log spread log(A) - alpha - beta*log(B); optionally restrict to last `window` rows."""
+    aligned = _align_pair(df, pair)
+    if aligned.empty:
+        return pd.Series(dtype=float, name="log_spread")
+
+    log_a = np.log(pd.to_numeric(aligned[pair[0]], errors="coerce"))
+    log_b = np.log(pd.to_numeric(aligned[pair[1]], errors="coerce"))
+    spread = log_a - alpha - beta * log_b
+    spread.name = "log_spread"
+    if window is not None and window > 0:
+        return spread.tail(window)
+    return spread
+
+
+def sma(series: pd.Series, n: int) -> pd.Series:
+    """Simple moving average (trailing)."""
+    if n <= 0:
+        raise ValueError("n must be positive")
+    return pd.to_numeric(series, errors="coerce").rolling(window=n, min_periods=n).mean()
+
+
+def rsi_wilder(series: pd.Series, period: int = 14) -> pd.Series:
+    """Wilder's RSI using exponential smoothing (matches common TA implementations)."""
+    if period <= 0:
+        raise ValueError("period must be positive")
+
+    s = pd.to_numeric(series, errors="coerce")
+    delta = s.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    rsi.name = "rsi"
+    return rsi
+
+
+def realized_volatility(series: pd.Series, window: int = 20) -> pd.Series:
+    """Rolling stdev of log returns (annualization left to caller if needed)."""
+    if window <= 1:
+        raise ValueError("window must be > 1")
+
+    s = pd.to_numeric(series, errors="coerce")
+    lr = np.log(s / s.shift(1))
+    rv = lr.rolling(window=window, min_periods=window).std(ddof=0)
+    rv.name = "rv"
+    return rv
+
+
+def rolling_percentile_rank(series: pd.Series, window: int | None = None) -> pd.Series:
+    """Percentile rank of each point vs strictly prior history (expanding if window is None).
+
+    Values lie in [0, 1]; NaN until two usable observations exist for expanding mode.
+    """
+    x = pd.to_numeric(series, errors="coerce")
+    if window is None:
+        out = pd.Series(index=x.index, dtype=float)
+        prior_vals: list[float] = []
+        for dt in x.index:
+            v = float(x.loc[dt]) if pd.notna(x.loc[dt]) else np.nan
+            if not prior_vals or np.isnan(v):
+                out.loc[dt] = np.nan
+            else:
+                arr = np.array(prior_vals)
+                out.loc[dt] = float(np.mean(arr < v))
+            if not np.isnan(v):
+                prior_vals.append(v)
+        out.name = "pct_rank"
+        return out
+
+    if window <= 1:
+        raise ValueError("window must be > 1")
+
+    def _pct_last(win: pd.Series) -> float:
+        if len(win) < window or win.isna().all():
+            return np.nan
+        cur = win.iloc[-1]
+        if np.isnan(cur):
+            return np.nan
+        hist = win.iloc[:-1].dropna()
+        if hist.empty:
+            return np.nan
+        return float(np.mean(hist.to_numpy(dtype=float) < float(cur)))
+
+    return x.rolling(window=window, min_periods=window).apply(_pct_last, raw=False)
+
+
+def high_vol_regime_flag(
+    rv_series: pd.Series, quantile: float = 0.8, min_periods: int = 40
+) -> pd.Series:
+    """True when today's RV is >= `quantile` of the expanding distribution of prior RV values."""
+    x = pd.to_numeric(rv_series, errors="coerce")
+    thr = x.shift(1).expanding(min_periods=min_periods).quantile(quantile)
+    flag = (x >= thr) & thr.notna()
+    flag.name = "high_vol"
+    return flag
