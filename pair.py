@@ -25,10 +25,18 @@ Saves the pairs to a csv file: pairs.csv.
 
 import pandas as pd
 import numpy as np
+import pickle
 from statsmodels.tsa.stattools import coint
 
 # Load nifty500.csv
 nifty500 = pd.read_csv('nifty500.csv', index_col=0, parse_dates=[0])
+
+# Load sector data from pickle file
+with open('sector_data.pkl', 'rb') as f:
+    sector_data = pickle.load(f)
+
+# Force sector data to be a dictionary
+sector_data = dict(sector_data)
 
 # Calculate start dates for each ticker in nifty500
 start_dates = {}
