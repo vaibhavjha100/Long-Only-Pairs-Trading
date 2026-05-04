@@ -55,13 +55,17 @@ pairs = pd.DataFrame(columns=['pairs'])
 lock_counter = 0
 
 for i in nifty500.index:
-    if lock_counter > 0:
-        lock_counter -= 1
-        # Add pairs from previous date to pairs dataframe current date
-        pairs.loc[i, 'pairs'] = pairs.loc[i - 1, 'pairs'].copy()
-        continue
     pos = nifty500.index.get_loc(i)
     if not isinstance(pos, int):
+        continue
+    if lock_counter > 0:
+        lock_counter -= 1
+        # Add pairs from previous trading date to pairs dataframe current date
+        if pos >= 1:
+            prev_i = nifty500.index[pos - 1]
+            pairs.loc[i, 'pairs'] = pairs.loc[prev_i, 'pairs'].copy()
+        else:
+            pairs.loc[i, 'pairs'] = []
         continue
     # Check if there are enough trading rows for a 500-row window ending at the current date
     if pos < engle_granger_window - 1:
