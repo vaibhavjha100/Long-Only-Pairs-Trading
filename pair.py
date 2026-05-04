@@ -37,7 +37,7 @@ for ticker in nifty500.columns:
 
 # Parameters
 correlation_window = 250
-correlation_threshold = 0.8
+correlation_threshold = 0.85
 engle_granger_window = 500
 alpha = 0.05
 
