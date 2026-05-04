@@ -85,4 +85,6 @@ for i in nifty500.index:
     print("Number of valid pairs: ", len(valid_pairs), "at date: ", i)
     pairs.loc[i, 'pairs'] = valid_pairs
 
+# Save the pairs to a csv file
+pairs.to_csv('pairs.csv')
 print("Pair discovery complete")
