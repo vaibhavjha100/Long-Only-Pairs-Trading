@@ -9,9 +9,9 @@ Pair discovery:
 - Engle-Granger cointegration test
 - Only include pairs with p-value < alpha
 
-Correlation Window: 250
+Correlation Window: 250 trading days
 Correlation Threshold: 0.8
-Engle-Granger Window: 500
+Engle-Granger Window: 500 trading days
 Alpha: 0.05
 
 Return:
@@ -41,7 +41,7 @@ correlation_threshold = 0.8
 engle_granger_window = 500
 alpha = 0.05
 
-pairs = pd.DataFrame(index=nifty500.columns)
+pairs = pd.DataFrame(columns=['pairs'])
 
 lock_counter = 0
 
@@ -49,19 +49,22 @@ for i in nifty500.index:
     if lock_counter > 0:
         lock_counter -= 1
         continue
-    # Check if there are enough observations for 500 days before the current date
-    if i - pd.Timedelta(days=engle_granger_window) < start_dates[ticker]:
+    pos = nifty500.index.get_loc(i)
+    if not isinstance(pos, int):
         continue
-    # Get the 500 days before the current date
-    window = nifty500.loc[i - pd.Timedelta(days=engle_granger_window):i]
+    # Check if there are enough trading rows for a 500-row window ending at the current date
+    if pos < engle_granger_window - 1:
+        continue
+    # Get the 500 trading rows before the current date
+    window = nifty500.iloc[pos - engle_granger_window + 1 : pos + 1]
     # Slice for valid tickers in window
     # A valid ticker is one that has start date before or equal to the 1st date in the window
     valid_tickers = [ticker for ticker in window.columns if start_dates[ticker] <= window.index[0]]
     window = window[valid_tickers]
 
     # Calculate sub window for correlation calculation
-    # The sub window should be the last 250 days before the current date
-    sub_window = window.loc[i - pd.Timedelta(days=correlation_window):i]
+    # The sub window should be the last 250 trading days before the current date
+    sub_window = window.iloc[-correlation_window:]
     # Slice for valid tickers in sub window
     # A valid ticker is one that has start date before or equal to the 1st date in the sub window
     valid_tickers = [ticker for ticker in sub_window.columns if start_dates[ticker] <= sub_window.index[0]]
@@ -70,7 +73,7 @@ for i in nifty500.index:
     # Calculate the rolling correlation between all pairs of stocks
     corr_mat = sub_window.corr()
     # Create a list of tuples of pairs with rolling correlation >= threshold
-    candidate_pairs = [(ticker1, ticker2) for ticker1 in valid_tickers for ticker2 in valid_tickers if ticker1 != ticker2 and corr_mat.loc[ticker1, ticker2] >= correlation_threshold]
+    candidate_pairs = [(ticker1, ticker2) for ticker1 in valid_tickers for ticker2 in valid_tickers if ticker1 < ticker2 and corr_mat.loc[ticker1, ticker2] >= correlation_threshold]
 
     valid_pairs = []
     # Engle-Granger cointegration test
