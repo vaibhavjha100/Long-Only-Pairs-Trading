@@ -4,11 +4,15 @@ Collection module
 Collect close price data for stocks in NIFTY500 and the NIFTY50 index.
 Data Source: Yahoo Finance through yfinance library.
 
+Collect sector data for each stock in NIFTY500.
+
 Saves the data to csv files: nifty500.csv and nifty50.csv.
+Saves sector data to pickle file: sector_data.pkl.
 '''
 
 import yfinance as yf
 import pandas as pd
+import pickle
 
 nifty500_list = pd.read_csv('ind_nifty500list.csv')
 tickers = nifty500_list['Symbol'].tolist()
@@ -36,6 +40,15 @@ print(nifty50_data.head())
 
 print(df.info())
 print(nifty50_data.info())
+
+# Collect sector data for each stock in NIFTY500
+sector_data = {}
+for ticker in tickers:
+    sector_data[ticker] = yf.Ticker(ticker).info['sector']
+
+# Save sector data to pickle file
+with open('sector_data.pkl', 'wb') as f:
+    pickle.dump(sector_data, f)
 
 # Save the data to csv files
 df.to_csv('nifty500.csv')
