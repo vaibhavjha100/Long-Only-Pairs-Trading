@@ -4,7 +4,8 @@ Pair module
 Find pairs of stocks that are cointegrated.
 
 Pair discovery:
-- Calculate rolling correlation between all pairs of stocks
+- Sector pre selection: only intra sector pairs enter the correlation step
+- Calculate correlation within each sector (not all combinations across the universe)
 - Only include pairs with rolling correlation >= threshold
 - Engle-Granger cointegration test
 - Only include pairs with p-value < alpha
@@ -80,10 +81,28 @@ for i in nifty500.index:
     valid_tickers = [ticker for ticker in sub_window.columns if start_dates[ticker] <= sub_window.index[0]]
     sub_window = sub_window[valid_tickers]
 
-    # Calculate the rolling correlation between all pairs of stocks
-    corr_mat = sub_window.corr()
-    # Create a list of tuples of pairs with rolling correlation >= threshold
-    candidate_pairs = [(ticker1, ticker2) for ticker1 in valid_tickers for ticker2 in valid_tickers if ticker1 < ticker2 and corr_mat.loc[ticker1, ticker2] >= correlation_threshold]
+    # Sector pre selection: only intra sector correlations (not all combinations)
+    sector_groups = {}
+    for ticker in valid_tickers:
+        sec = sector_data.get(ticker)
+        if sec is None:
+            continue
+        sector_groups.setdefault(sec, []).append(ticker)
+
+    candidate_pairs = []
+    for sec in sector_groups:
+        tickers_in_sec = sector_groups[sec]
+        if len(tickers_in_sec) < 2:
+            continue
+        corr_mat = sub_window[tickers_in_sec].corr()
+        candidate_pairs.extend(
+            [
+                (ticker1, ticker2)
+                for ticker1 in tickers_in_sec
+                for ticker2 in tickers_in_sec
+                if ticker1 < ticker2 and corr_mat.loc[ticker1, ticker2] >= correlation_threshold
+            ]
+        )
 
     valid_pairs = []
     # Engle-Granger cointegration test
