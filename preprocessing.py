@@ -41,3 +41,5 @@ nifty500 = nifty500.iloc[start_pos:]
 # Save the data to csv files
 nifty500.to_csv('nifty500.csv')
 nifty50.to_csv('nifty50.csv')
+
+print("Preprocessing complete")
