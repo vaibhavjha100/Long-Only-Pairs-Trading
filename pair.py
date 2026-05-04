@@ -48,6 +48,8 @@ lock_counter = 0
 for i in nifty500.index:
     if lock_counter > 0:
         lock_counter -= 1
+        # Add pairs from previous date to pairs dataframe current date
+        pairs.loc[i, 'pairs'] = pairs.loc[i - 1, 'pairs'].copy()
         continue
     pos = nifty500.index.get_loc(i)
     if not isinstance(pos, int):
