@@ -4,16 +4,9 @@ Walk forward module
 Walk forward the strategy and calculates the portfolio metrics.
 
 Use this cost structure:
-  brokerage_rate:       0.0003    (0.03% per side)
-  brokerage_max:        20.0      (INR cap per order)
-  minimum of brokerage rat and max is taken as the brokerage cost
-  stt:              0.001
-  exchange_txn_charge:  0.0000335
-  sebi_charge:          0.000001
-  stamp_duty_buy:       0.00015   (buy side only)
-  stamp_duty_sell:      0.0
-  gst_rate:             0.18      (on brokerage + exchange_charge + sebi)
+  transaction cost:     0.6%     (0.6% of turnover)
   dp_sell_charge:       13.5      (fixed INR per scrip per sell, CDSL)
+  
 
 Returns:
 - portfolio returns dataframe
@@ -21,14 +14,14 @@ Returns:
 - multiple columns:
     - gross portfolio value
     - transaction cost
-    - tax
     - net portfolio value
     - gross return
     - net return
     - holdings
     - cash
     - trades
-    - pnl
+    - gross pnl
+    - net pnl
     - market regime
     - num_open_positions
     - num_trades
@@ -52,6 +45,9 @@ nifty50 = pd.read_csv('nifty50.csv', index_col=0, parse_dates=[0])
 # Slice nifty500 from same start date as nifty50
 nifty500 = nifty500.loc[nifty50.index[0]:]
 
+# Shift signals by 1 day to avoid look-ahead bias
+signals = signals.shift(1)
+
 def market_regime(nifty50):
     # Calculate 200 day simple moving average for the last date
     sma200 = nifty50.iloc[-1].rolling(200).mean()
@@ -62,28 +58,64 @@ def market_regime(nifty50):
     else:
         return 'Down'
 
+def check_holdings(holdings: dict[str, int]) -> bool:
+    for ticker, quantity in holdings.items():
+        if quantity > 0:
+            return True
+    return False
+
 # Cost Parameters
-brokerage_rate = 0.0003
-brokerage_max = 20.0
-stt = 0.001
-exchange_txn_charge = 0.0000335
-sebi_charge = 0.000001
-stamp_duty_buy = 0.00015
-stamp_duty_sell = 0.0
-gst_rate = 0.18
+transaction_cost = 0.155
 dp_sell_charge = 13.5
 
 initial_capital = 100000
 
 # Initialize portfolio dataframe
-portfolio = pd.DataFrame(index=nifty500.index, columns=['gross_portfolio_value', 'transaction_cost', 'tax', 'net_portfolio_value', 'gross_return', 'net_return', 'holdings', 'cash', 'trades', 'pnl', 'market_regime', 'num_open_positions', 'num_trades', 'trade_turnover'])
-portfolio['gross_portfolio_value'] = initial_capital
-portfolio['transaction_cost'] = 0
-portfolio['tax'] = 0
-portfolio['net_portfolio_value'] = initial_capital
-portfolio['gross_return'] = 0
-portfolio['net_return'] = 0
+portfolio = pd.DataFrame(index=nifty500.index, columns=['gross_portfolio_value', 'transaction_cost', 'net_portfolio_value', 'gross_return', 'net_return', 'holdings', 'cash', 'trades', 'gross_pnl', 'net_pnl', 'market_regime', 'num_open_positions', 'num_trades', 'trade_turnover'])
+
 
 for i in nifty500.index:
     if i not in signals.index:
-        continue
+        # Take all siganls as 0
+        signals.loc[i] = 0
+    mreg = market_regime(nifty50)
+    # Calculate cash available as previous day's cash or initial capital
+    cash = portfolio.loc[i-1, 'cash'] if i-1 in portfolio.index else initial_capital
+
+    holdings = portfolio.loc[i-1, 'holdings'] if i-1 in portfolio.index else {ticker: 0 for ticker in signals.columns}
+    trades = 0
+    trade_turnover = 0
+    transaction_cost = 0
+
+    # All tickers with positive signals
+    buy_tickers = signals.loc[i, signals.loc[i] > 0].index
+
+    # All tickers with negative signals
+    sell_tickers = signals.loc[i, signals.loc[i] < 0].index
+
+    # We sell first to get cash
+    
+    # Check if there are any holdings to sell
+    if check_holdings(holdings):
+        if len(sell_tickers) > 0:
+            # Sell the holdings
+            for ticker in sell_tickers:
+                if ticker in holdings:
+                    # Sell the holding
+                    cash += holdings[ticker] * nifty500.loc[i, ticker]
+                    holdings[ticker] = 0
+                    trades += 1
+                    trade_turnover += holdings[ticker] * nifty500.loc[i, ticker]
+                    transaction_cost += trade_turnover * transaction_cost + dp_sell_charge
+        if mreg == 'Down':
+            # Sell all holdings
+            for ticker, quantity in holdings.items():
+                if quantity > 0:
+                    # Sell the holding
+                    cash += quantity * nifty500.loc[i, ticker]
+                    holdings[ticker] = 0
+                    trades += 1
+                    trade_turnover += quantity * nifty500.loc[i, ticker]
+                    transaction_cost += trade_turnover * transaction_cost + dp_sell_charge
+    if len(buy_tickers) > 0:
+        pass # TODO: Fill buy orders
