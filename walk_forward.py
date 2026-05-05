@@ -61,6 +61,8 @@ def check_holdings(holdings: dict[str, int]) -> bool:
             return True
     return False
 
+
+
 # Cost Parameters
 transaction_cost = 0.155
 dp_sell_charge = 13.5
@@ -80,7 +82,7 @@ for i in nifty500.index:
     cash = portfolio.loc[i-1, 'cash'] if i-1 in portfolio.index else initial_capital
 
     holdings = portfolio.loc[i-1, 'holdings'] if i-1 in portfolio.index else {ticker: 0 for ticker in signals.columns}
-    trades = 0
+    trades = {ticker: 0 for ticker in signals.columns}
     trade_turnover = 0
     transaction_cost = 0
 
@@ -99,20 +101,22 @@ for i in nifty500.index:
             for ticker in sell_tickers:
                 if ticker in holdings:
                     # Sell the holding
-                    cash += holdings[ticker] * nifty500.loc[i, ticker]
-                    holdings[ticker] = 0
-                    trades += 1
+                    cash += holdings[ticker] * nifty500.loc[i, ticker] 
                     trade_turnover += holdings[ticker] * nifty500.loc[i, ticker]
                     transaction_cost += trade_turnover * transaction_cost + dp_sell_charge
+                    trades[ticker] = holdings[ticker]
+                    holdings[ticker] = 0
+                    cash -= transaction_cost
         if mreg == 'Down':
             # Sell all holdings
             for ticker, quantity in holdings.items():
                 if quantity > 0:
                     # Sell the holding
                     cash += quantity * nifty500.loc[i, ticker]
-                    holdings[ticker] = 0
-                    trades += 1
                     trade_turnover += quantity * nifty500.loc[i, ticker]
                     transaction_cost += trade_turnover * transaction_cost + dp_sell_charge
-    if len(buy_tickers) > 0:
+                    trades[ticker] = quantity
+                    holdings[ticker] = 0
+                    cash -= transaction_cost
+    if len(buy_tickers) > 0 and mreg == 'Up':
         pass # TODO: Fill buy orders
