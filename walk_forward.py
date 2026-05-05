@@ -104,7 +104,7 @@ for i in nifty500.index:
                     cash += holdings[ticker] * nifty500.loc[i, ticker] 
                     trade_turnover += holdings[ticker] * nifty500.loc[i, ticker]
                     transaction_cost += trade_turnover * transaction_cost + dp_sell_charge
-                    trades[ticker] = holdings[ticker]
+                    trades[ticker] = -holdings[ticker]
                     holdings[ticker] = 0
                     cash -= transaction_cost
         if mreg == 'Down':
@@ -115,7 +115,7 @@ for i in nifty500.index:
                     cash += quantity * nifty500.loc[i, ticker]
                     trade_turnover += quantity * nifty500.loc[i, ticker]
                     transaction_cost += trade_turnover * transaction_cost + dp_sell_charge
-                    trades[ticker] = quantity
+                    trades[ticker] = -quantity
                     holdings[ticker] = 0
                     cash -= transaction_cost
     if len(buy_tickers) > 0 and mreg == 'Up':
