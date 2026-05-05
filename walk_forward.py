@@ -45,15 +45,18 @@ nifty500 = nifty500.loc[nifty50.index[0]:]
 # Shift signals by 1 day to avoid look-ahead bias
 signals = signals.shift(1)
 
-def market_regime(nifty50):
-    # Calculate 200 day simple moving average for the last date
-    sma200 = nifty50.iloc[-1].rolling(200).mean()
-    price = nifty50['Close'].iloc[-1]
-
+def market_regime(nifty50_slice):
+    # 200-day SMA of Close at the last row of the slice (walk-forward safe)
+    closes = nifty50_slice['Close']
+    if len(closes) < 200:
+        return 'Down'
+    sma200 = closes.rolling(200).mean().iloc[-1]
+    price = closes.iloc[-1]
+    if pd.isna(sma200) or pd.isna(price):
+        return 'Down'
     if price > sma200:
         return 'Up'
-    else:
-        return 'Down'
+    return 'Down'
 
 def check_holdings(holdings: dict[str, int]) -> bool:
     for ticker, quantity in holdings.items():
@@ -81,15 +84,30 @@ for i in nifty500.index:
         # Take all siganls as 0
         signals.loc[i] = 0
 
+    pos = nifty500.index.get_loc(i)
+    if not isinstance(pos, int):
+        continue
+    prev_i = nifty500.index[pos - 1] if pos > 0 else None
+
     # Calculate market regime for the slice of nifty50 till the current date
     mreg = market_regime(nifty50.loc[nifty50.index <= i])
-    # Calculate cash available as previous day's cash or initial capital
-    cash = portfolio.loc[i-1, 'cash'].copy() if i-1 in portfolio.index else initial_capital
 
-    holdings = portfolio.loc[i-1, 'holdings'].copy() if i-1 in portfolio.index else {ticker: 0 for ticker in signals.columns}
+    # Previous trading day state (calendar i-1 is not valid for daily bars)
+    if prev_i is None:
+        cash = initial_capital
+        holdings = {ticker: 0 for ticker in signals.columns}
+    else:
+        prev_cash = portfolio.loc[prev_i, 'cash']
+        cash = float(prev_cash) if pd.notna(prev_cash) else initial_capital
+        prev_h = portfolio.loc[prev_i, 'holdings']
+        if isinstance(prev_h, dict):
+            holdings = dict(prev_h)
+        else:
+            holdings = {ticker: 0 for ticker in signals.columns}
+
     trades = {ticker: 0 for ticker in signals.columns}
     trade_turnover = 0
-    transaction_cost = portfolio.loc[i-1, 'transaction_cost'].copy() if i-1 in portfolio.index else 0
+    transaction_cost = 0
 
     # All tickers with positive signals
     buy_tickers = signals.loc[i, signals.loc[i] > 0].index
@@ -169,3 +187,12 @@ for i in nifty500.index:
             trade_turnover += buy_amount
             transaction_cost += buy_cost
             cash -= buy_amount + buy_cost
+
+    portfolio.at[i, 'cash'] = cash
+    portfolio.at[i, 'holdings'] = dict(holdings)
+    portfolio.at[i, 'trades'] = dict(trades)
+    portfolio.at[i, 'transaction_cost'] = transaction_cost
+    portfolio.at[i, 'trade_turnover'] = trade_turnover
+    portfolio.at[i, 'market_regime'] = mreg
+
+portfolio.to_csv('backtest_results.csv')
