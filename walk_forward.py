@@ -64,7 +64,7 @@ def check_holdings(holdings: dict[str, int]) -> bool:
 
 
 # Cost Parameters
-transaction_cost = 0.155
+transaction_cost_rate = 0.006
 dp_sell_charge = 13.5
 
 initial_capital = 100000
@@ -74,17 +74,22 @@ portfolio = pd.DataFrame(index=nifty500.index, columns=['portfolio_value', 'tran
 
 
 for i in nifty500.index:
+    # Skip 1st 200 days for market regime calculation
+    if i < nifty50.index[200]:
+        continue
     if i not in signals.index:
         # Take all siganls as 0
         signals.loc[i] = 0
-    mreg = market_regime(nifty50)
-    # Calculate cash available as previous day's cash or initial capital
-    cash = portfolio.loc[i-1, 'cash'] if i-1 in portfolio.index else initial_capital
 
-    holdings = portfolio.loc[i-1, 'holdings'] if i-1 in portfolio.index else {ticker: 0 for ticker in signals.columns}
+    # Calculate market regime for the slice of nifty50 till the current date
+    mreg = market_regime(nifty50.loc[nifty50.index <= i])
+    # Calculate cash available as previous day's cash or initial capital
+    cash = portfolio.loc[i-1, 'cash'].copy() if i-1 in portfolio.index else initial_capital
+
+    holdings = portfolio.loc[i-1, 'holdings'].copy() if i-1 in portfolio.index else {ticker: 0 for ticker in signals.columns}
     trades = {ticker: 0 for ticker in signals.columns}
     trade_turnover = 0
-    transaction_cost = 0
+    transaction_cost = portfolio.loc[i-1, 'transaction_cost'].copy() if i-1 in portfolio.index else 0
 
     # All tickers with positive signals
     buy_tickers = signals.loc[i, signals.loc[i] > 0].index
@@ -101,22 +106,66 @@ for i in nifty500.index:
             for ticker in sell_tickers:
                 if ticker in holdings:
                     # Sell the holding
-                    cash += holdings[ticker] * nifty500.loc[i, ticker] 
-                    trade_turnover += holdings[ticker] * nifty500.loc[i, ticker]
-                    transaction_cost += trade_turnover * transaction_cost + dp_sell_charge
+                    sell_amount = holdings[ticker] * nifty500.loc[i, ticker]
+                    cash += sell_amount - sell_amount * transaction_cost_rate - dp_sell_charge
+                    trade_turnover += sell_amount
+                    transaction_cost += sell_amount * transaction_cost_rate + dp_sell_charge
                     trades[ticker] = -holdings[ticker]
                     holdings[ticker] = 0
-                    cash -= transaction_cost
         if mreg == 'Down':
             # Sell all holdings
             for ticker, quantity in holdings.items():
                 if quantity > 0:
                     # Sell the holding
-                    cash += quantity * nifty500.loc[i, ticker]
-                    trade_turnover += quantity * nifty500.loc[i, ticker]
-                    transaction_cost += trade_turnover * transaction_cost + dp_sell_charge
+                    sell_amount = quantity * nifty500.loc[i, ticker]
+                    cash += sell_amount - sell_amount * transaction_cost_rate - dp_sell_charge
+                    trade_turnover += sell_amount
+                    transaction_cost += sell_amount * transaction_cost_rate + dp_sell_charge
                     trades[ticker] = -quantity
                     holdings[ticker] = 0
-                    cash -= transaction_cost
     if len(buy_tickers) > 0 and mreg == 'Up':
-        pass # TODO: Fill buy orders
+        valid_buy_tickers = []
+        for ticker in buy_tickers:
+            if ticker not in holdings or ticker not in nifty500.columns:
+                continue
+            if pd.isna(nifty500.loc[i, ticker]) or nifty500.loc[i, ticker] <= 0:
+                continue
+            if pd.isna(signals.loc[i, ticker]) or signals.loc[i, ticker] <= 0:
+                continue
+            valid_buy_tickers.append(ticker)
+
+        signal_sum = signals.loc[i, valid_buy_tickers].sum() if len(valid_buy_tickers) > 0 else 0
+
+        while len(valid_buy_tickers) > 0 and signal_sum > 0:
+            target_base = cash
+            current_values = {}
+            gaps = {}
+
+            for ticker in valid_buy_tickers:
+                current_values[ticker] = holdings[ticker] * nifty500.loc[i, ticker]
+                target_base += current_values[ticker]
+
+            for ticker in valid_buy_tickers:
+                target_weight = signals.loc[i, ticker] / signal_sum
+                target_value = target_base * target_weight
+                gaps[ticker] = target_value - current_values[ticker]
+
+            buy_candidates = []
+            for ticker in valid_buy_tickers:
+                buy_amount = nifty500.loc[i, ticker]
+                buy_cost = buy_amount * transaction_cost_rate
+                if gaps[ticker] > 0 and cash >= buy_amount + buy_cost:
+                    buy_candidates.append(ticker)
+
+            if len(buy_candidates) == 0:
+                break
+
+            ticker = max(buy_candidates, key=lambda x: gaps[x])
+            buy_amount = nifty500.loc[i, ticker]
+            buy_cost = buy_amount * transaction_cost_rate
+
+            trades[ticker] += 1
+            holdings[ticker] += 1
+            trade_turnover += buy_amount
+            transaction_cost += buy_cost
+            cash -= buy_amount + buy_cost
