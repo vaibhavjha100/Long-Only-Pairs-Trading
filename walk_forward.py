@@ -202,6 +202,9 @@ for i in nifty500.index:
     mv = holdings_market_value(i, holdings)
     portfolio_value = cash + mv
 
+    if portfolio_value <= 0:
+        raise ValueError(f"Portfolio value is less than 0 at {i}")
+
     if prev_i is None:
         prev_portfolio_value = initial_capital
     else:
