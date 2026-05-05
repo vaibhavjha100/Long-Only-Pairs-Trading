@@ -11,7 +11,7 @@ Pair discovery:
 - Only include pairs with p-value < alpha
 
 Correlation Window: 250 trading days
-Correlation Threshold: 0.8
+Correlation Threshold: 0.85
 Engle-Granger Window: 500 trading days
 Alpha: 0.05
 
@@ -31,6 +31,7 @@ from statsmodels.tsa.stattools import coint
 
 # Load nifty500.csv
 nifty500 = pd.read_csv('nifty500.csv', index_col=0, parse_dates=[0])
+nifty500 = nifty500.sort_index()
 
 # Load sector data from pickle file
 with open('sector_data.pkl', 'rb') as f:
@@ -39,10 +40,30 @@ with open('sector_data.pkl', 'rb') as f:
 # Force sector data to be a dictionary
 sector_data = dict(sector_data)
 
-# Calculate start dates for each ticker in nifty500
+# Calculate start dates for each ticker in nifty500 (no valid prices -> excluded from windows)
 start_dates = {}
 for ticker in nifty500.columns:
     start_dates[ticker] = nifty500[ticker].first_valid_index()
+
+
+def _engle_granger_passes(y: pd.Series, x: pd.Series, alpha: float) -> bool:
+    """Return True if cointegration p-value < alpha; skip degenerate or failing cases."""
+    y = pd.Series(y).dropna()
+    x = pd.Series(x).dropna()
+    common = y.index.intersection(x.index)
+    if len(common) < 10:
+        return False
+    yy = y.loc[common].astype(float).values
+    xx = x.loc[common].astype(float).values
+    if not np.isfinite(yy).all() or not np.isfinite(xx).all():
+        return False
+    if np.nanstd(yy) == 0 or np.nanstd(xx) == 0:
+        return False
+    try:
+        _, pvalue, _ = coint(yy, xx)
+    except Exception:
+        return False
+    return bool(pd.notna(pvalue) and pvalue < alpha)
 
 # Parameters
 correlation_window = 250
@@ -63,7 +84,11 @@ for i in nifty500.index:
         # Add pairs from previous trading date to pairs dataframe current date
         if pos >= 1:
             prev_i = nifty500.index[pos - 1]
-            pairs.loc[i, 'pairs'] = pairs.loc[prev_i, 'pairs'].copy()
+            if prev_i in pairs.index:
+                prev_pairs = pairs.loc[prev_i, 'pairs']
+                pairs.loc[i, 'pairs'] = list(prev_pairs) if isinstance(prev_pairs, list) else []
+            else:
+                pairs.loc[i, 'pairs'] = []
         else:
             pairs.loc[i, 'pairs'] = []
         continue
@@ -74,7 +99,10 @@ for i in nifty500.index:
     window = nifty500.iloc[pos - engle_granger_window + 1 : pos + 1]
     # Slice for valid tickers in window
     # A valid ticker is one that has start date before or equal to the 1st date in the window
-    valid_tickers = [ticker for ticker in window.columns if start_dates[ticker] <= window.index[0]]
+    valid_tickers = [
+        ticker for ticker in window.columns
+        if start_dates[ticker] is not None and start_dates[ticker] <= window.index[0]
+    ]
     window = window[valid_tickers]
 
     # Calculate sub window for correlation calculation
@@ -82,7 +110,10 @@ for i in nifty500.index:
     sub_window = window.iloc[-correlation_window:]
     # Slice for valid tickers in sub window
     # A valid ticker is one that has start date before or equal to the 1st date in the sub window
-    valid_tickers = [ticker for ticker in sub_window.columns if start_dates[ticker] <= sub_window.index[0]]
+    valid_tickers = [
+        ticker for ticker in sub_window.columns
+        if start_dates[ticker] is not None and start_dates[ticker] <= sub_window.index[0]
+    ]
     sub_window = sub_window[valid_tickers]
 
     # Sector pre selection: only intra sector correlations (not all combinations)
@@ -104,15 +135,16 @@ for i in nifty500.index:
                 (ticker1, ticker2)
                 for ticker1 in tickers_in_sec
                 for ticker2 in tickers_in_sec
-                if ticker1 < ticker2 and corr_mat.loc[ticker1, ticker2] >= correlation_threshold
+                if ticker1 < ticker2
+                and pd.notna(corr_mat.loc[ticker1, ticker2])
+                and corr_mat.loc[ticker1, ticker2] >= correlation_threshold
             ]
         )
 
     valid_pairs = []
     # Engle-Granger cointegration test
     for pair in candidate_pairs:
-        _, pvalue, _ = coint(window[pair[0]], window[pair[1]])
-        if pvalue < alpha:
+        if _engle_granger_passes(window[pair[0]], window[pair[1]], alpha):
             valid_pairs.append(pair)
     
     if len(valid_pairs) > 0:

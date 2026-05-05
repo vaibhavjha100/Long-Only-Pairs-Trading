@@ -15,7 +15,9 @@ import pandas as pd
 import pickle
 
 nifty500_list = pd.read_csv('ind_nifty500list.csv')
-tickers = nifty500_list['Symbol'].tolist()
+if 'Symbol' not in nifty500_list.columns:
+    raise ValueError("ind_nifty500list.csv must contain a 'Symbol' column.")
+tickers = nifty500_list['Symbol'].dropna().astype(str).tolist()
 
 # Add '.NS' to the end of each ticker
 tickers = [ticker + '.NS' for ticker in tickers]
@@ -24,15 +26,46 @@ tickers = [ticker + '.NS' for ticker in tickers]
 # Daily data with max period
 # Only include Close price with ticker as column name
 
-df = pd.DataFrame()
+def _download_close_series(symbol: str):
+    """Return Close as Series named ``symbol``, or None if missing/empty."""
+    data = yf.download(
+        symbol,
+        period='max',
+        interval='1d',
+        auto_adjust=True,
+        progress=False,
+        multi_level_index=False,
+    )
+    if data is None or getattr(data, 'empty', True):
+        return None
+    if 'Close' not in data.columns:
+        return None
+    close = data['Close'].copy()
+    close.name = symbol
+    return close
 
+
+_close_cols = []
 for ticker in tickers:
-    data = yf.download(ticker, period='max', interval='1d', auto_adjust=True, multi_level_index=False)
-    data = data['Close']
-    data.name = ticker
-    df = pd.concat([df, data], axis=1, sort=True)
+    s = _download_close_series(ticker)
+    if s is not None:
+        _close_cols.append(s)
 
-nifty50_data = yf.download('^NSEI', period='max', interval='1d', auto_adjust=True, multi_level_index=False)
+if not _close_cols:
+    raise ValueError('No NIFTY500 close data downloaded; check tickers and network.')
+
+df = pd.concat(_close_cols, axis=1, sort=True)
+
+nifty50_data = yf.download(
+    '^NSEI',
+    period='max',
+    interval='1d',
+    auto_adjust=True,
+    progress=False,
+    multi_level_index=False,
+)
+if nifty50_data is None or nifty50_data.empty or 'Close' not in nifty50_data.columns:
+    raise ValueError('Failed to download ^NSEI (nifty50 proxy); check network and symbol.')
 
 # Print for both dfs
 print(df.head())
@@ -44,7 +77,10 @@ print(nifty50_data.info())
 # Collect sector data for each stock in NIFTY500
 sector_data = {}
 for ticker in tickers:
-    sector_data[ticker] = yf.Ticker(ticker).info['sector']
+    info = yf.Ticker(ticker).info
+    if not isinstance(info, dict):
+        info = {}
+    sector_data[ticker] = info.get('sector')
 
 # Save sector data to pickle file
 with open('sector_data.pkl', 'wb') as f:

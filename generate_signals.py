@@ -33,8 +33,10 @@ else:
 
 # Load nifty 500 list
 nifty500 = pd.read_csv('ind_nifty500list.csv')
+if 'Symbol' not in nifty500.columns:
+    raise ValueError("ind_nifty500list.csv must contain a 'Symbol' column.")
 
-all_tickers = nifty500['Symbol'].tolist()
+all_tickers = nifty500['Symbol'].dropna().astype(str).tolist()
 
 # Add '.NS' to the end of each ticker
 all_tickers = [ticker + '.NS' for ticker in all_tickers]
