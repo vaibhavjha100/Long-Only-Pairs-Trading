@@ -12,16 +12,13 @@ Returns:
 - portfolio returns dataframe
 - index is the date
 - multiple columns:
-    - gross portfolio value
     - transaction cost
-    - net portfolio value
-    - gross return
-    - net return
+    - portfolio value
+    - daily return
     - holdings
     - cash
     - trades
-    - gross pnl
-    - net pnl
+    - daily pnl
     - market regime
     - num_open_positions
     - num_trades
@@ -71,7 +68,7 @@ dp_sell_charge = 13.5
 initial_capital = 100000
 
 # Initialize portfolio dataframe
-portfolio = pd.DataFrame(index=nifty500.index, columns=['gross_portfolio_value', 'transaction_cost', 'net_portfolio_value', 'gross_return', 'net_return', 'holdings', 'cash', 'trades', 'gross_pnl', 'net_pnl', 'market_regime', 'num_open_positions', 'num_trades', 'trade_turnover'])
+portfolio = pd.DataFrame(index=nifty500.index, columns=['portfolio_value', 'transaction_cost', 'daily_return', 'holdings', 'cash', 'trades', 'daily_pnl', 'market_regime', 'num_open_positions', 'num_trades', 'trade_turnover'])
 
 
 for i in nifty500.index:
