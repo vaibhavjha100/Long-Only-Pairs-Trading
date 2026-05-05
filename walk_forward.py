@@ -188,11 +188,24 @@ for i in nifty500.index:
             transaction_cost += buy_cost
             cash -= buy_amount + buy_cost
 
-    portfolio.at[i, 'cash'] = cash
-    portfolio.at[i, 'holdings'] = dict(holdings)
-    portfolio.at[i, 'trades'] = dict(trades)
+    prev_portfolio_value = portfolio.loc[prev_i, 'portfolio_value'] if prev_i is not None else initial_capital
+    portfolio_value = cash + sum(holdings.values()) * nifty500.loc[i, ticker]
+    daily_return = (portfolio_value - prev_portfolio_value) / prev_portfolio_value
+    daily_pnl = portfolio_value - prev_portfolio_value
+    num_open_positions = sum(1 for quantity in holdings.values() if quantity > 0)
+    num_trades = sum(trades.values())
+    trade_turnover = sum(trade_turnover)
+    portfolio.at[i, 'portfolio_value'] = portfolio_value
     portfolio.at[i, 'transaction_cost'] = transaction_cost
+    portfolio.at[i, 'daily_return'] = daily_return
+    portfolio.at[i, 'holdings'] = holdings
+    portfolio.at[i, 'cash'] = cash
+    portfolio.at[i, 'trades'] = trades
+    portfolio.at[i, 'daily_pnl'] = daily_pnl
+    portfolio.at[i, 'num_open_positions'] = num_open_positions
+    portfolio.at[i, 'num_trades'] = num_trades
     portfolio.at[i, 'trade_turnover'] = trade_turnover
     portfolio.at[i, 'market_regime'] = mreg
 
-portfolio.to_csv('backtest_results.csv')
+print(portfolio.head())
+print(portfolio.info())
