@@ -65,6 +65,17 @@ def check_holdings(holdings: dict[str, int]) -> bool:
     return False
 
 
+def holdings_market_value(i, holdings: dict) -> float:
+    mv = 0.0
+    for t, q in holdings.items():
+        if q <= 0 or t not in nifty500.columns:
+            continue
+        px = nifty500.loc[i, t]
+        if pd.notna(px):
+            mv += q * float(px)
+    return mv
+
+
 
 # Cost Parameters
 transaction_cost_rate = 0.006
@@ -188,24 +199,37 @@ for i in nifty500.index:
             transaction_cost += buy_cost
             cash -= buy_amount + buy_cost
 
-    prev_portfolio_value = portfolio.loc[prev_i, 'portfolio_value'] if prev_i is not None else initial_capital
-    portfolio_value = cash + sum(holdings.values()) * nifty500.loc[i, ticker]
-    daily_return = (portfolio_value - prev_portfolio_value) / prev_portfolio_value
+    mv = holdings_market_value(i, holdings)
+    portfolio_value = cash + mv
+
+    if prev_i is None:
+        prev_portfolio_value = initial_capital
+    else:
+        pv_prev = portfolio.loc[prev_i, 'portfolio_value']
+        prev_portfolio_value = float(pv_prev) if pd.notna(pv_prev) else initial_capital
+
     daily_pnl = portfolio_value - prev_portfolio_value
+    if pd.notna(prev_portfolio_value) and prev_portfolio_value != 0:
+        daily_return = daily_pnl / prev_portfolio_value
+    else:
+        daily_return = np.nan
+
     num_open_positions = sum(1 for quantity in holdings.values() if quantity > 0)
-    num_trades = sum(trades.values())
-    trade_turnover = sum(trade_turnover)
+    # Count of tickers with any fill this day; total share lots = sum(abs(v) for v in trades.values())
+    num_trades = sum(1 for v in trades.values() if v != 0)
+
     portfolio.at[i, 'portfolio_value'] = portfolio_value
     portfolio.at[i, 'transaction_cost'] = transaction_cost
     portfolio.at[i, 'daily_return'] = daily_return
-    portfolio.at[i, 'holdings'] = holdings
-    portfolio.at[i, 'cash'] = cash
-    portfolio.at[i, 'trades'] = trades
+    portfolio.at[i, 'holdings'] = dict(holdings)
+    portfolio.at[i, 'cash'] = float(cash)
+    portfolio.at[i, 'trades'] = dict(trades)
     portfolio.at[i, 'daily_pnl'] = daily_pnl
-    portfolio.at[i, 'num_open_positions'] = num_open_positions
-    portfolio.at[i, 'num_trades'] = num_trades
-    portfolio.at[i, 'trade_turnover'] = trade_turnover
+    portfolio.at[i, 'num_open_positions'] = int(num_open_positions)
+    portfolio.at[i, 'num_trades'] = int(num_trades)
+    portfolio.at[i, 'trade_turnover'] = float(trade_turnover)
     portfolio.at[i, 'market_regime'] = mreg
 
 print(portfolio.head())
 print(portfolio.info())
+portfolio.to_csv('backtest_results.csv')
